@@ -16,7 +16,8 @@ config = configparser.ConfigParser()
 
 
 def encode_candidate(sen_encoder, img_encoder, dataloader, device):
-    s_list = []
+    mean_list = []
+    var_list = []
     s_ids = []
     i_list = []
     i_ids = []
@@ -27,14 +28,16 @@ def encode_candidate(sen_encoder, img_encoder, dataloader, device):
             src_seq = src_seq.to(device)
             src_pos = src_pos.to(device)
             img_embedded = img_encoder(images).to(torch.device("cpu"))
-            sen_embedded = sen_encoder(src_seq, src_pos).to(torch.device("cpu"))
+            mean, var = sen_encoder(src_seq, src_pos).to(torch.device("cpu"))
 
             i_list.append(img_embedded)
-            s_list.append(sen_embedded)
+            mean_list.append(mean)
+            var_list.append(var)
             i_ids.append(img_ids)
             s_ids.append(ids)
 
-    s_vectors = torch.cat(tuple(s_list)).numpy()
+    s_means = torch.cat(tuple(mean_list)).numpy()
+    s_vars = torch.cat(tuple(var_list)).numpy()
     s_ids = torch.cat(tuple(s_ids)).numpy()
     i_vectors = torch.cat(tuple(i_list)).numpy()
     i_ids = torch.cat(tuple(i_ids)).numpy()
@@ -52,7 +55,7 @@ def encode_candidate(sen_encoder, img_encoder, dataloader, device):
     i_vectors = i_vectors[mask]
     i_ids = i_ids[mask]
 
-    return s_vectors, s_ids, i_vectors, i_ids
+    return s_means, s_vars, s_ids, i_vectors, i_ids
 
 
 def main(args):
@@ -75,6 +78,7 @@ def main(args):
     print("[args] image_encoder_path=%s" % image_encoder_path)
     print("[args] name=%s" % name)
     print("[args] mode=%s" % mode)
+    print()
 
     device = torch.device("cuda:" + str(gpu) if torch.cuda.is_available() else "cpu")
 
@@ -106,11 +110,13 @@ def main(args):
     print("[modelparames] d_img=%d" % d_img)
     print("[modelparames] d_img_hidden=%d" % d_img_hidden)
     print("[modelparames] d_model=%d" % d_model)
+    print()
 
     hyperparams = config["hyperparams"]
     batch_size = hyperparams.getint("batch_size")
 
     print("[hyperparames] batch_size=%d" % batch_size)
+    print()
 
     # Data preparation
     print("[info] Loading vocabulary ...")
@@ -124,13 +130,13 @@ def main(args):
 
     # Load params
     img_encoder.load_state_dict(torch.load(image_encoder_path))
-    sen_encoder.load_state_dict(torch.load(sentence_encoder_path))
+    sen_encoder.load_state_dict(torch.load(sentence_encoder_path), strict=False)
     img_encoder.eval()
     sen_encoder.eval()
 
     # Evaluate
     print("[info] Encoding candidate ...")
-    s_vectors, s_ids, i_vectors, i_ids = encode_candidate(sen_encoder, img_encoder, dataloader_val, device)
+    s_means, s_vars, s_ids, i_vectors, i_ids = encode_candidate(sen_encoder, img_encoder, dataloader_val, device)
 
     if mode == 's2i':
         print('[info] Retrieving image')
@@ -138,11 +144,11 @@ def main(args):
         caption_id = int(caption_id)
         coco = dataloader_val.dataset.coco
         print("Caption: %s" % coco.anns[caption_id]['caption'])
-        target = s_vectors[s_ids == caption_id]
-        target = target.flatten()
+        mean = s_means[s_ids == caption_id]
+        var = s_vars[s_ids == caption_id]
 
-        scores = i_vectors.dot(target)
-        sorted_ids = i_ids[np.argsort(scores)[::-1]]
+        scores = np.sum((mean - i_vectors) * (mean - i_vectors) / var, axis=1)
+        sorted_ids = i_ids[np.argsort(scores)]
         for i in range(9):
             print(sorted_ids[i])
 
@@ -152,10 +158,9 @@ def main(args):
         image_id = int(image_id)
         coco = dataloader_val.dataset.coco
         target = i_vectors[i_ids == image_id]
-        target = target.flatten()
 
-        scores = s_vectors.dot(target)
-        sorted_ids = s_ids[np.argsort(scores)[::-1]]
+        scores = np.sum((s_means - target) * (s_means - i_vectors) / s_vars, axis=1)
+        sorted_ids = s_ids[np.argsort(scores)]
         for i in range(9):
             print("Caption: %s" % coco.anns[sorted_ids[i]]['caption'])
 

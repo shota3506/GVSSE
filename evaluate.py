@@ -15,7 +15,8 @@ config = configparser.ConfigParser()
 
 
 def evaluate(sen_encoder, img_encoder, dataloader, device):
-    s_list = []
+    mean_list = []
+    var_list = []
     s_ids = []
     i_list = []
     i_ids = []
@@ -26,35 +27,53 @@ def evaluate(sen_encoder, img_encoder, dataloader, device):
             src_seq = src_seq.to(device)
             src_pos = src_pos.to(device)
             img_embedded = img_encoder(images).to(torch.device("cpu"))
-            sen_embedded = sen_encoder(src_seq, src_pos).to(torch.device("cpu"))
+            mean, var = sen_encoder(src_seq, src_pos)
+            mean = mean.to(torch.device("cpu"))
+            var = var.to(torch.device("cpu"))
 
             i_list.append(img_embedded)
-            s_list.append(sen_embedded)
+            mean_list.append(mean)
+            var_list.append(var)
             i_ids.append(img_ids)
             s_ids.append(ids)
 
-    s_vectors = torch.cat(tuple(s_list)).numpy()
-    s_ids = torch.cat(tuple(s_ids)).numpy()
-    i_vectors = torch.cat(tuple(i_list)).numpy()
-    i_ids = torch.cat(tuple(i_ids)).numpy()
+    s_means = torch.cat(tuple(mean_list))
+    s_vars = torch.cat(tuple(var_list))
+    s_ids = torch.cat(tuple(s_ids))
+    i_vectors = torch.cat(tuple(i_list))
+    i_ids = torch.cat(tuple(i_ids))
 
     used_ids = set()
     mask = []
     for i, id in enumerate(i_ids):
+        id = id.item()
         if id not in used_ids:
             used_ids.add(id)
             mask.append(True)
         else:
             mask.append(False)
-    mask = np.array(mask, dtype=bool)
+    mask = torch.tensor(mask)
 
-    s_vectors = s_vectors[mask]
+    s_means = s_means[mask]
+    s_vars = s_vars[mask]
     i_vectors = i_vectors[mask]
 
-    sim_mat = np.dot(s_vectors, i_vectors.T)
+    sim_mat = get_similarity_matrix(s_means, s_vars, i_vectors, device)
 
     s2i, i2s = calc_retrieval_score(sim_mat)
     return s2i, i2s
+
+
+def get_similarity_matrix(mean, var, target, device, batch_size=10):
+    target = target.to(device)
+    mat = []
+    with torch.no_grad():
+        for i in range(0, len(mean), batch_size):
+            m = mean[i:i+batch_size].to(device)
+            v = var[i:i+batch_size].to(device)
+            mat.append(torch.sum((m[:, None] - target[None]) ** 2 / v[:, None], dim=2))
+
+    return torch.cat(mat).to(torch.device("cpu")).numpy()
 
 
 def calc_retrieval_score(sim_mat):
@@ -69,7 +88,7 @@ def calc_retrieval_score(sim_mat):
 
     # image retrieval
     for i in range(sim_mat.shape[0]):
-        ordered_ids = np.argsort(sim_mat[i])[::-1]
+        ordered_ids = np.argsort(sim_mat[i])
         for k in ks:
             s2i["recall"][k] += recall_at_k(i, ordered_ids, k=k)
             # s2i["precision"][k] += precision_at_k(s_ids[n], ordered_i_ids, k=k)
@@ -79,7 +98,7 @@ def calc_retrieval_score(sim_mat):
 
     # sentence retrieval
     for j in range(sim_mat.shape[1]):
-        ordered_ids = np.argsort(sim_mat[:, j])[::-1]
+        ordered_ids = np.argsort(sim_mat[:, j])
         for k in ks:
             i2s["recall"][k] += recall_at_k(j, ordered_ids, k=k)
             # i2s["precision"][k] += precision_at_k(i_ids[m], ordered_s_ids, k=k)
@@ -119,6 +138,7 @@ def main(args):
     print("[args] sentence_encoder_path=%s" % sentence_encoder_path)
     print("[args] image_encoder_path=%s" % image_encoder_path)
     print("[args] name=%s" % name)
+    print()
 
     device = torch.device("cuda:" + str(gpu) if torch.cuda.is_available() else "cpu")
 
@@ -150,11 +170,13 @@ def main(args):
     print("[modelparames] d_img=%d" % d_img)
     print("[modelparames] d_img_hidden=%d" % d_img_hidden)
     print("[modelparames] d_model=%d" % d_model)
+    print()
 
     hyperparams = config["hyperparams"]
     batch_size = hyperparams.getint("batch_size")
 
     print("[hyperparames] batch_size=%d" % batch_size)
+    print()
 
     print("[info] Loading vocabulary ...")
     with open(vocab_path, 'rb') as f:
@@ -167,7 +189,7 @@ def main(args):
 
     # Load params
     img_encoder.load_state_dict(torch.load(image_encoder_path))
-    sen_encoder.load_state_dict(torch.load(sentence_encoder_path))
+    sen_encoder.load_state_dict(torch.load(sentence_encoder_path), strict=False)
     img_encoder.eval()
     sen_encoder.eval()
 
