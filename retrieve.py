@@ -28,7 +28,9 @@ def encode_candidate(sen_encoder, img_encoder, dataloader, device):
             src_seq = src_seq.to(device)
             src_pos = src_pos.to(device)
             img_embedded = img_encoder(images).to(torch.device("cpu"))
-            mean, var = sen_encoder(src_seq, src_pos).to(torch.device("cpu"))
+            mean, var = sen_encoder(src_seq, src_pos)
+            mean = mean.to(torch.device("cpu"))
+            var = var.to(torch.device("cpu"))
 
             i_list.append(img_embedded)
             mean_list.append(mean)
@@ -93,7 +95,6 @@ def main(args):
     d_v = modelparams.getint("d_v")
     d_inner = modelparams.getint("d_inner")
     d_img = modelparams.getint("d_img")
-    d_img_hidden = modelparams.getint("d_img_hidden")
     d_model = modelparams.getint("d_model")
 
     print("[modelparames] sentence_encoder_name=%s" % sentence_encoder_name)
@@ -108,7 +109,6 @@ def main(args):
     if d_inner:
         print("[modelparames] d_inner=%d" % d_inner)
     print("[modelparames] d_img=%d" % d_img)
-    print("[modelparames] d_img_hidden=%d" % d_img_hidden)
     print("[modelparames] d_model=%d" % d_model)
     print()
 
@@ -125,7 +125,7 @@ def main(args):
     dataloader_val = datasets.coco.get_loader(img2vec_path, val_json_path, vocab, batch_size)
 
     # Model preparation
-    img_encoder = models.ImageEncoder(d_img, d_img_hidden, d_model).to(device)
+    img_encoder = models.ImageEncoder(d_img, d_model).to(device)
     sen_encoder = models.SentenceEncoder(vocab, sentence_encoder_name, d_model, n_layers, n_head, d_k, d_v, d_inner).to(device)
 
     # Load params
@@ -137,6 +137,11 @@ def main(args):
     # Evaluate
     print("[info] Encoding candidate ...")
     s_means, s_vars, s_ids, i_vectors, i_ids = encode_candidate(sen_encoder, img_encoder, dataloader_val, device)
+    print(s_means.shape)
+    print(s_vars.shape)
+    print(s_ids.shape)
+    print(i_vectors.shape)
+    print(i_ids.shape)
 
     if mode == 's2i':
         print('[info] Retrieving image')
@@ -159,7 +164,7 @@ def main(args):
         coco = dataloader_val.dataset.coco
         target = i_vectors[i_ids == image_id]
 
-        scores = np.sum((s_means - target) * (s_means - i_vectors) / s_vars, axis=1)
+        scores = np.sum((s_means - target) * (s_means - target) / s_vars, axis=1)
         sorted_ids = s_ids[np.argsort(scores)]
         for i in range(9):
             print("Caption: %s" % coco.anns[sorted_ids[i]]['caption'])
