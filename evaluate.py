@@ -14,7 +14,7 @@ from build_vocab import Vocab
 config = configparser.ConfigParser()
 
 
-def evaluate(sen_encoder, img_encoder, dataloader, device):
+def encode_candidates(sen_encoder, img_encoder, dataloader, device):
     mean_list = []
     var_list = []
     s_ids = []
@@ -42,10 +42,10 @@ def evaluate(sen_encoder, img_encoder, dataloader, device):
     s_ids = torch.cat(tuple(s_ids))
     i_vectors = torch.cat(tuple(i_list))
     i_ids = torch.cat(tuple(i_ids))
+    return s_means, s_vars, s_ids, i_vectors, i_ids
 
-    for xx in torch.sqrt(torch.norm(s_vars, dim=1)):
-        print(xx)
 
+def remove_duplicates(s_means, s_vars, s_ids, i_vectors, i_ids):
     used_ids = set()
     mask = []
     for i, id in enumerate(i_ids):
@@ -59,12 +59,10 @@ def evaluate(sen_encoder, img_encoder, dataloader, device):
 
     s_means = s_means[mask]
     s_vars = s_vars[mask]
+    s_ids = s_ids[mask]
     i_vectors = i_vectors[mask]
-
-    sim_mat = get_similarity_matrix(s_means, s_vars, i_vectors, device)
-
-    s2i, i2s = calc_retrieval_score(sim_mat)
-    return s2i, i2s
+    i_ids = i_ids[mask]
+    return s_means, s_vars, s_ids, i_vectors, i_ids
 
 
 def get_similarity_matrix(mean, var, target, device, batch_size=10):
@@ -150,6 +148,7 @@ def main(args):
     # Model parameters
     modelparams = config["modelparams"]
     sentence_encoder_name = modelparams.get("sentence_encoder")
+    metric = modelparams.get("metric", "maharanobis")
     n_layers = modelparams.getint("n_layers")
     n_head = modelparams.getint("n_head")
     d_k = modelparams.getint("d_k")
@@ -160,6 +159,7 @@ def main(args):
     d_model = modelparams.getint("d_model")
 
     print("[modelparames] sentence_encoder_name=%s" % sentence_encoder_name)
+    print("[modelparames] metric=%s" % metric)
     if n_layers:
         print("[modelparames] n_layers=%d" % n_layers)
     if n_head:
@@ -188,7 +188,8 @@ def main(args):
 
     # Model preparation
     img_encoder = models.ImageEncoder(d_img, d_model).to(device)
-    sen_encoder = models.SentenceEncoder(vocab, sentence_encoder_name, d_model, n_layers, n_head, d_k, d_v, d_inner).to(device)
+    sen_encoder = models.SentenceEncoder(vocab, sentence_encoder_name, d_model,
+                                         n_layers, n_head, d_k, d_v, d_inner, variance=(metric == "maharanobis")).to(device)
 
     # Load params
     img_encoder.load_state_dict(torch.load(image_encoder_path))
@@ -197,8 +198,13 @@ def main(args):
     sen_encoder.eval()
 
     # Evaluate
+    print("[info] Encoding candidates ...")
+    s_means, s_vars, s_ids, i_vectors, i_ids = encode_candidates(sen_encoder, img_encoder, dataloader_val, device)
+    s_means, s_vars, s_ids, i_vectors, i_ids = remove_duplicates(s_means, s_vars, s_ids, i_vectors, i_ids)
+
     print("[info] Evaluating on the validation set ...")
-    s2i, i2s = evaluate(sen_encoder, img_encoder, dataloader_val, device)
+    sim_mat = get_similarity_matrix(s_means, s_vars, i_vectors, device)
+    s2i, i2s = calc_retrieval_score(sim_mat)
     print(
         "[validation] s2i[R@5=%.02f, R@10=%.02f, R@20=%.02f], i2s[R@5=%.02f, R@10=%.02f, R@20=%.02f]" % \
         (s2i["recall"][5], s2i["recall"][10], s2i["recall"][20],

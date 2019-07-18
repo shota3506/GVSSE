@@ -15,7 +15,7 @@ from build_vocab import Vocab
 config = configparser.ConfigParser()
 
 
-def encode_candidate(sen_encoder, img_encoder, dataloader, device):
+def encode_candidates(sen_encoder, img_encoder, dataloader, device):
     mean_list = []
     var_list = []
     s_ids = []
@@ -38,21 +38,25 @@ def encode_candidate(sen_encoder, img_encoder, dataloader, device):
             i_ids.append(img_ids)
             s_ids.append(ids)
 
-    s_means = torch.cat(tuple(mean_list)).numpy()
-    s_vars = torch.cat(tuple(var_list)).numpy()
-    s_ids = torch.cat(tuple(s_ids)).numpy()
-    i_vectors = torch.cat(tuple(i_list)).numpy()
-    i_ids = torch.cat(tuple(i_ids)).numpy()
+    s_means = torch.cat(tuple(mean_list))
+    s_vars = torch.cat(tuple(var_list))
+    s_ids = torch.cat(tuple(s_ids))
+    i_vectors = torch.cat(tuple(i_list))
+    i_ids = torch.cat(tuple(i_ids))
+    return s_means, s_vars, s_ids, i_vectors, i_ids
 
+
+def remove_duplicates(s_means, s_vars, s_ids, i_vectors, i_ids):
     used_ids = set()
     mask = []
     for i, id in enumerate(i_ids):
+        id = id.item()
         if id not in used_ids:
             used_ids.add(id)
             mask.append(True)
         else:
             mask.append(False)
-    mask = np.array(mask, dtype=bool)
+    mask = torch.tensor(mask)
 
     i_vectors = i_vectors[mask]
     i_ids = i_ids[mask]
@@ -135,13 +139,14 @@ def main(args):
     sen_encoder.eval()
 
     # Evaluate
-    print("[info] Encoding candidate ...")
-    s_means, s_vars, s_ids, i_vectors, i_ids = encode_candidate(sen_encoder, img_encoder, dataloader_val, device)
-    print(s_means.shape)
-    print(s_vars.shape)
-    print(s_ids.shape)
-    print(i_vectors.shape)
-    print(i_ids.shape)
+    print("[info] Encoding candidates ...")
+    s_means, s_vars, s_ids, i_vectors, i_ids = encode_candidates(sen_encoder, img_encoder, dataloader_val, device)
+    s_means, s_vars, s_ids, i_vectors, i_ids = remove_duplicates(s_means, s_vars, s_ids, i_vectors, i_ids)
+    s_means.numpy()
+    s_vars.numpy()
+    s_ids.numpy()
+    i_vectors.numpy()
+    i_ids.numpy()
 
     if mode == 's2i':
         print('[info] Retrieving image')
