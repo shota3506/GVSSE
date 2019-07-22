@@ -42,6 +42,10 @@ def main(args):
         model = torchvision.models.resnet50(pretrained=True)
         dim = model.fc.in_features
         model.fc = Net()
+    elif model_name == 'resnet152':
+        model = torchvision.models.resnet152(pretrained=True)
+        dim = model.fc.in_features
+        model.fc = Net()
     else:
         raise ValueError
 
